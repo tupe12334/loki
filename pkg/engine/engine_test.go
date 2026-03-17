@@ -193,7 +193,7 @@ func TestMaybeDualResolve_Disabled(t *testing.T) {
 
 	// dualResolveSem is nil, should be a no-op
 	e.maybeDualResolve(
-		log.NewNopLogger(), "tenant", nil, nil, nil, 0, 0,
+		log.NewNopLogger(), "tenant", nil, nil, nil, nil, 0,
 	)
 }
 
@@ -211,7 +211,7 @@ func TestMaybeDualResolve_DropsWhenFull(t *testing.T) {
 	e.dualResolveSem <- struct{}{}
 
 	e.maybeDualResolve(
-		log.NewNopLogger(), "tenant", nil, nil, nil, 0, 0,
+		log.NewNopLogger(), "tenant", nil, nil, nil, nil, 0,
 	)
 
 	// Verify the dropped counter was incremented
@@ -253,7 +253,7 @@ func TestMaybeDualResolve_RunsAsync(t *testing.T) {
 	plannerCtx := physical.NewContext(time.Now().Add(-time.Hour), time.Now())
 
 	e.maybeDualResolve(
-		log.NewNopLogger(), "tenant", nil, nil, plannerCtx, 5, time.Millisecond,
+		log.NewNopLogger(), "tenant", nil, nil, plannerCtx, nil, time.Millisecond,
 	)
 
 	// Wait for the goroutine to finish by waiting for the semaphore to be drained
@@ -321,5 +321,123 @@ func TestEngine_DualResolveSemaphore_Initialization(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, e.dualResolveSem)
 		require.Equal(t, 5, cap(e.dualResolveSem))
+	})
+}
+
+func TestExtractScanSections(t *testing.T) {
+	var g dag.Graph[physical.Node]
+	ss := g.Add(&physical.ScanSet{
+		Targets: []*physical.ScanTarget{
+			{Type: physical.ScanTypeDataObject, DataObject: &physical.DataObjScan{
+				Location: "obj1", Section: 0, StreamIDs: []int64{10, 20},
+			}},
+			{Type: physical.ScanTypeDataObject, DataObject: &physical.DataObjScan{
+				Location: "obj2", Section: 3, StreamIDs: []int64{5},
+			}},
+			{Type: physical.ScanTypePointers, Pointers: &physical.PointersScan{}},
+		},
+	})
+	limit := g.Add(&physical.Limit{Fetch: 10})
+	_ = g.AddEdge(dag.Edge[physical.Node]{Parent: limit, Child: ss})
+	plan := physical.FromGraph(g)
+
+	sections := extractScanSections(plan)
+	require.Len(t, sections, 2)
+	require.Equal(t, sectionKey{Location: "obj1", Section: 0}, sections[0].Key)
+	require.Equal(t, []int64{10, 20}, sections[0].StreamIDs)
+	require.Equal(t, sectionKey{Location: "obj2", Section: 3}, sections[1].Key)
+	require.Equal(t, []int64{5}, sections[1].StreamIDs)
+}
+
+func TestCompareSections(t *testing.T) {
+	t.Run("exact match", func(t *testing.T) {
+		ms := []resolvedSection{
+			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1, 2}},
+			{Key: sectionKey{"obj2", 1}, StreamIDs: []int64{3}},
+		}
+		igw := []resolvedSection{
+			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{2, 1}},
+			{Key: sectionKey{"obj2", 1}, StreamIDs: []int64{3}},
+		}
+		cmp := compareSections(ms, igw)
+		require.Equal(t, 2, cmp.MsCount)
+		require.Equal(t, 2, cmp.IgwCount)
+		require.True(t, cmp.IgwSupersetOfMs)
+		require.Empty(t, cmp.MissingFromIgw)
+		require.Empty(t, cmp.StreamMismatches)
+	})
+
+	t.Run("igw is superset", func(t *testing.T) {
+		ms := []resolvedSection{
+			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1}},
+		}
+		igw := []resolvedSection{
+			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1}},
+			{Key: sectionKey{"obj2", 1}, StreamIDs: []int64{2}},
+		}
+		cmp := compareSections(ms, igw)
+		require.Equal(t, 1, cmp.MsCount)
+		require.Equal(t, 2, cmp.IgwCount)
+		require.True(t, cmp.IgwSupersetOfMs)
+		require.Empty(t, cmp.MissingFromIgw)
+		require.Empty(t, cmp.StreamMismatches)
+	})
+
+	t.Run("missing sections from igw", func(t *testing.T) {
+		ms := []resolvedSection{
+			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1}},
+			{Key: sectionKey{"obj2", 1}, StreamIDs: []int64{2}},
+		}
+		igw := []resolvedSection{
+			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1}},
+		}
+		cmp := compareSections(ms, igw)
+		require.Equal(t, 2, cmp.MsCount)
+		require.Equal(t, 1, cmp.IgwCount)
+		require.False(t, cmp.IgwSupersetOfMs)
+		require.Equal(t, []sectionKey{{"obj2", 1}}, cmp.MissingFromIgw)
+		require.Empty(t, cmp.StreamMismatches)
+	})
+
+	t.Run("stream id mismatches", func(t *testing.T) {
+		ms := []resolvedSection{
+			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1, 2, 3}},
+		}
+		igw := []resolvedSection{
+			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1, 2, 4}},
+		}
+		cmp := compareSections(ms, igw)
+		require.Equal(t, 1, cmp.MsCount)
+		require.Equal(t, 1, cmp.IgwCount)
+		require.True(t, cmp.IgwSupersetOfMs)
+		require.Empty(t, cmp.MissingFromIgw)
+		require.Equal(t, []sectionKey{{"obj1", 0}}, cmp.StreamMismatches)
+	})
+
+	t.Run("both missing and mismatched", func(t *testing.T) {
+		ms := []resolvedSection{
+			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1, 2}},
+			{Key: sectionKey{"obj2", 1}, StreamIDs: []int64{3}},
+			{Key: sectionKey{"obj3", 2}, StreamIDs: []int64{5}},
+		}
+		igw := []resolvedSection{
+			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1, 99}},
+		}
+		cmp := compareSections(ms, igw)
+		require.Equal(t, 3, cmp.MsCount)
+		require.Equal(t, 1, cmp.IgwCount)
+		require.False(t, cmp.IgwSupersetOfMs)
+		require.Len(t, cmp.MissingFromIgw, 2)
+		require.Len(t, cmp.StreamMismatches, 1)
+		require.Equal(t, sectionKey{"obj1", 0}, cmp.StreamMismatches[0])
+	})
+
+	t.Run("empty inputs", func(t *testing.T) {
+		cmp := compareSections(nil, nil)
+		require.Equal(t, 0, cmp.MsCount)
+		require.Equal(t, 0, cmp.IgwCount)
+		require.True(t, cmp.IgwSupersetOfMs)
+		require.Empty(t, cmp.MissingFromIgw)
+		require.Empty(t, cmp.StreamMismatches)
 	})
 }
