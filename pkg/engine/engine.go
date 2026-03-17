@@ -18,6 +18,7 @@ import (
 	"github.com/grafana/dskit/flagext"
 	"github.com/grafana/dskit/httpgrpc"
 	"github.com/grafana/dskit/tenant"
+	"github.com/grafana/dskit/user"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/model"
 	"go.opentelemetry.io/otel"
@@ -455,7 +456,7 @@ func (e *Engine) maybeDualResolve(
 				}
 			}()
 
-			resolveCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			resolveCtx, cancel := context.WithTimeout(user.InjectOrgID(context.Background(), tenantID), 2*time.Minute)
 			defer cancel()
 
 			start := time.Now()
