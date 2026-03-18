@@ -325,14 +325,18 @@ func TestEngine_DualResolveSemaphore_Initialization(t *testing.T) {
 }
 
 func TestExtractScanSections(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	tr1 := physical.TimeRange{Start: now, End: now.Add(10 * time.Second)}
+	tr2 := physical.TimeRange{Start: now.Add(-time.Minute), End: now}
+
 	var g dag.Graph[physical.Node]
 	ss := g.Add(&physical.ScanSet{
 		Targets: []*physical.ScanTarget{
 			{Type: physical.ScanTypeDataObject, DataObject: &physical.DataObjScan{
-				Location: "obj1", Section: 0, StreamIDs: []int64{10, 20},
+				Location: "obj1", Section: 0, StreamIDs: []int64{10, 20}, MaxTimeRange: tr1,
 			}},
 			{Type: physical.ScanTypeDataObject, DataObject: &physical.DataObjScan{
-				Location: "obj2", Section: 3, StreamIDs: []int64{5},
+				Location: "obj2", Section: 3, StreamIDs: []int64{5}, MaxTimeRange: tr2,
 			}},
 			{Type: physical.ScanTypePointers, Pointers: &physical.PointersScan{}},
 		},
@@ -345,19 +349,24 @@ func TestExtractScanSections(t *testing.T) {
 	require.Len(t, sections, 2)
 	require.Equal(t, sectionKey{Location: "obj1", Section: 0}, sections[0].Key)
 	require.Equal(t, []int64{10, 20}, sections[0].StreamIDs)
+	require.Equal(t, tr1, sections[0].TimeRange)
 	require.Equal(t, sectionKey{Location: "obj2", Section: 3}, sections[1].Key)
 	require.Equal(t, []int64{5}, sections[1].StreamIDs)
+	require.Equal(t, tr2, sections[1].TimeRange)
 }
 
 func TestCompareSections(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	tr := physical.TimeRange{Start: now, End: now.Add(10 * time.Second)}
+
 	t.Run("exact match", func(t *testing.T) {
 		ms := []resolvedSection{
-			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1, 2}},
-			{Key: sectionKey{"obj2", 1}, StreamIDs: []int64{3}},
+			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1, 2}, TimeRange: tr},
+			{Key: sectionKey{"obj2", 1}, StreamIDs: []int64{3}, TimeRange: tr},
 		}
 		igw := []resolvedSection{
-			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{2, 1}},
-			{Key: sectionKey{"obj2", 1}, StreamIDs: []int64{3}},
+			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{2, 1}, TimeRange: tr},
+			{Key: sectionKey{"obj2", 1}, StreamIDs: []int64{3}, TimeRange: tr},
 		}
 		cmp := compareSections(ms, igw)
 		require.Equal(t, 2, cmp.MsCount)
@@ -365,15 +374,16 @@ func TestCompareSections(t *testing.T) {
 		require.True(t, cmp.IgwSupersetOfMs)
 		require.Empty(t, cmp.MissingFromIgw)
 		require.Empty(t, cmp.StreamMismatches)
+		require.Empty(t, cmp.TimeMismatches)
 	})
 
 	t.Run("igw is superset", func(t *testing.T) {
 		ms := []resolvedSection{
-			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1}},
+			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1}, TimeRange: tr},
 		}
 		igw := []resolvedSection{
-			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1}},
-			{Key: sectionKey{"obj2", 1}, StreamIDs: []int64{2}},
+			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1}, TimeRange: tr},
+			{Key: sectionKey{"obj2", 1}, StreamIDs: []int64{2}, TimeRange: tr},
 		}
 		cmp := compareSections(ms, igw)
 		require.Equal(t, 1, cmp.MsCount)
@@ -381,15 +391,16 @@ func TestCompareSections(t *testing.T) {
 		require.True(t, cmp.IgwSupersetOfMs)
 		require.Empty(t, cmp.MissingFromIgw)
 		require.Empty(t, cmp.StreamMismatches)
+		require.Empty(t, cmp.TimeMismatches)
 	})
 
 	t.Run("missing sections from igw", func(t *testing.T) {
 		ms := []resolvedSection{
-			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1}},
-			{Key: sectionKey{"obj2", 1}, StreamIDs: []int64{2}},
+			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1}, TimeRange: tr},
+			{Key: sectionKey{"obj2", 1}, StreamIDs: []int64{2}, TimeRange: tr},
 		}
 		igw := []resolvedSection{
-			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1}},
+			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1}, TimeRange: tr},
 		}
 		cmp := compareSections(ms, igw)
 		require.Equal(t, 2, cmp.MsCount)
@@ -397,14 +408,15 @@ func TestCompareSections(t *testing.T) {
 		require.False(t, cmp.IgwSupersetOfMs)
 		require.Equal(t, []sectionKey{{"obj2", 1}}, cmp.MissingFromIgw)
 		require.Empty(t, cmp.StreamMismatches)
+		require.Empty(t, cmp.TimeMismatches)
 	})
 
 	t.Run("stream id mismatches", func(t *testing.T) {
 		ms := []resolvedSection{
-			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1, 2, 3}},
+			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1, 2, 3}, TimeRange: tr},
 		}
 		igw := []resolvedSection{
-			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1, 2, 4}},
+			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1, 2, 4}, TimeRange: tr},
 		}
 		cmp := compareSections(ms, igw)
 		require.Equal(t, 1, cmp.MsCount)
@@ -412,16 +424,36 @@ func TestCompareSections(t *testing.T) {
 		require.True(t, cmp.IgwSupersetOfMs)
 		require.Empty(t, cmp.MissingFromIgw)
 		require.Equal(t, []sectionKey{{"obj1", 0}}, cmp.StreamMismatches)
+		require.Empty(t, cmp.TimeMismatches)
+	})
+
+	t.Run("time range mismatches", func(t *testing.T) {
+		trDifferent := physical.TimeRange{Start: now.Add(-time.Minute), End: now}
+		ms := []resolvedSection{
+			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1, 2}, TimeRange: tr},
+			{Key: sectionKey{"obj2", 1}, StreamIDs: []int64{3}, TimeRange: tr},
+		}
+		igw := []resolvedSection{
+			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1, 2}, TimeRange: trDifferent},
+			{Key: sectionKey{"obj2", 1}, StreamIDs: []int64{3}, TimeRange: tr},
+		}
+		cmp := compareSections(ms, igw)
+		require.Equal(t, 2, cmp.MsCount)
+		require.Equal(t, 2, cmp.IgwCount)
+		require.True(t, cmp.IgwSupersetOfMs)
+		require.Empty(t, cmp.MissingFromIgw)
+		require.Empty(t, cmp.StreamMismatches)
+		require.Equal(t, []sectionKey{{"obj1", 0}}, cmp.TimeMismatches)
 	})
 
 	t.Run("both missing and mismatched", func(t *testing.T) {
 		ms := []resolvedSection{
-			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1, 2}},
-			{Key: sectionKey{"obj2", 1}, StreamIDs: []int64{3}},
-			{Key: sectionKey{"obj3", 2}, StreamIDs: []int64{5}},
+			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1, 2}, TimeRange: tr},
+			{Key: sectionKey{"obj2", 1}, StreamIDs: []int64{3}, TimeRange: tr},
+			{Key: sectionKey{"obj3", 2}, StreamIDs: []int64{5}, TimeRange: tr},
 		}
 		igw := []resolvedSection{
-			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1, 99}},
+			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1, 99}, TimeRange: tr},
 		}
 		cmp := compareSections(ms, igw)
 		require.Equal(t, 3, cmp.MsCount)
@@ -430,6 +462,7 @@ func TestCompareSections(t *testing.T) {
 		require.Len(t, cmp.MissingFromIgw, 2)
 		require.Len(t, cmp.StreamMismatches, 1)
 		require.Equal(t, sectionKey{"obj1", 0}, cmp.StreamMismatches[0])
+		require.Empty(t, cmp.TimeMismatches)
 	})
 
 	t.Run("empty inputs", func(t *testing.T) {
@@ -439,6 +472,7 @@ func TestCompareSections(t *testing.T) {
 		require.True(t, cmp.IgwSupersetOfMs)
 		require.Empty(t, cmp.MissingFromIgw)
 		require.Empty(t, cmp.StreamMismatches)
+		require.Empty(t, cmp.TimeMismatches)
 	})
 }
 

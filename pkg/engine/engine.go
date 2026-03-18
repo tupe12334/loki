@@ -494,6 +494,7 @@ func (e *Engine) maybeDualResolve(
 				"igw_superset_of_ms", cmp.IgwSupersetOfMs,
 				"missing_from_igw", len(cmp.MissingFromIgw),
 				"stream_id_mismatches", len(cmp.StreamMismatches),
+				"time_mismatches", len(cmp.TimeMismatches),
 			)
 
 			if len(cmp.MissingFromIgw) > 0 {
@@ -512,6 +513,15 @@ func (e *Engine) maybeDualResolve(
 					"query", params.QueryString(),
 					"count", len(cmp.StreamMismatches),
 					"first_few", fmt.Sprintf("%v", cmp.StreamMismatches[:limit]),
+				)
+			}
+			if len(cmp.TimeMismatches) > 0 {
+				limit := min(len(cmp.TimeMismatches), 5)
+				level.Warn(logger).Log(
+					"msg", "dual-resolve: time range mismatches",
+					"query", params.QueryString(),
+					"count", len(cmp.TimeMismatches),
+					"first_few", fmt.Sprintf("%v", cmp.TimeMismatches[:limit]),
 				)
 			}
 		}()
@@ -562,6 +572,7 @@ func (k sectionKey) String() string {
 type resolvedSection struct {
 	Key       sectionKey
 	StreamIDs []int64
+	TimeRange physical.TimeRange
 }
 
 // extractScanSections walks a physical plan and returns details of every
@@ -573,13 +584,14 @@ func extractScanSections(plan *physical.Plan) []resolvedSection {
 			if ss, ok := n.(*physical.ScanSet); ok {
 				for _, t := range ss.Targets {
 					if t.Type == physical.ScanTypeDataObject && t.DataObject != nil {
-						sections = append(sections, resolvedSection{
-							Key: sectionKey{
-								Location: string(t.DataObject.Location),
-								Section:  t.DataObject.Section,
-							},
-							StreamIDs: t.DataObject.StreamIDs,
-						})
+					sections = append(sections, resolvedSection{
+						Key: sectionKey{
+							Location: string(t.DataObject.Location),
+							Section:  t.DataObject.Section,
+						},
+						StreamIDs: t.DataObject.StreamIDs,
+						TimeRange: t.DataObject.MaxTimeRange,
+					})
 					}
 				}
 			}
@@ -601,27 +613,34 @@ type comparisonResult struct {
 	IgwSupersetOfMs  bool
 	MissingFromIgw   []sectionKey
 	StreamMismatches []sectionKey
+	TimeMismatches   []sectionKey
 }
 
 // compareSections checks whether the index-gateway resolved sections are a
-// superset of the metastore sections, and whether stream IDs match for
-// sections present in both.
+// superset of the metastore sections, and whether stream IDs and time ranges
+// match for sections present in both.
 func compareSections(msSections, igwSections []resolvedSection) comparisonResult {
-	igwMap := make(map[sectionKey][]int64, len(igwSections))
+	type igwEntry struct {
+		StreamIDs []int64
+		TimeRange physical.TimeRange
+	}
+
+	igwMap := make(map[sectionKey]igwEntry, len(igwSections))
 	for _, s := range igwSections {
 		ids := make([]int64, len(s.StreamIDs))
 		copy(ids, s.StreamIDs)
 		slices.Sort(ids)
-		igwMap[s.Key] = ids
+		igwMap[s.Key] = igwEntry{StreamIDs: ids, TimeRange: s.TimeRange}
 	}
 
 	var (
 		missingFromIgw   []sectionKey
 		streamMismatches []sectionKey
+		timeMismatches   []sectionKey
 	)
 
 	for _, ms := range msSections {
-		igwIDs, found := igwMap[ms.Key]
+		entry, found := igwMap[ms.Key]
 		if !found {
 			missingFromIgw = append(missingFromIgw, ms.Key)
 			continue
@@ -629,8 +648,11 @@ func compareSections(msSections, igwSections []resolvedSection) comparisonResult
 		msIDs := make([]int64, len(ms.StreamIDs))
 		copy(msIDs, ms.StreamIDs)
 		slices.Sort(msIDs)
-		if !slices.Equal(msIDs, igwIDs) {
+		if !slices.Equal(msIDs, entry.StreamIDs) {
 			streamMismatches = append(streamMismatches, ms.Key)
+		}
+		if ms.TimeRange.Start != entry.TimeRange.Start || ms.TimeRange.End != entry.TimeRange.End {
+			timeMismatches = append(timeMismatches, ms.Key)
 		}
 	}
 
@@ -640,6 +662,7 @@ func compareSections(msSections, igwSections []resolvedSection) comparisonResult
 		IgwSupersetOfMs:  len(missingFromIgw) == 0,
 		MissingFromIgw:   missingFromIgw,
 		StreamMismatches: streamMismatches,
+		TimeMismatches:   timeMismatches,
 	}
 }
 
