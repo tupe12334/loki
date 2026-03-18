@@ -390,7 +390,7 @@ func (e *Engine) buildPhysicalPlan(ctx context.Context, tenantID string, logger 
 	timer := prometheus.NewTimer(e.metrics.physicalPlanning)
 
 	var catalog physical.Catalog
-	if e.cfg.UseIndexGatewayPlanning && e.indexGateway != nil {
+	if e.cfg.UseIndexGatewayPlanning && e.indexGateway != nil && e.cfg.TSDBCoversQuery(params.Start()) {
 		catalog = physical.NewTSDBCatalog(e.tsdbSectionsResolver(ctx, tenantID))
 	} else {
 		catalog = physical.NewMetastoreCatalog(e.metastoreSectionsResolver(ctx, tenantID))
@@ -452,6 +452,9 @@ func (e *Engine) maybeDualResolve(
 	msDuration time.Duration,
 ) {
 	if e.dualResolveSem == nil {
+		return
+	}
+	if !e.cfg.TSDBCoversQuery(params.Start()) {
 		return
 	}
 

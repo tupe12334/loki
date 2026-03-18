@@ -53,6 +53,11 @@ type Config struct {
 	// UseIndexGatewayPlanning uses the index-gateway (TSDB) instead of the
 	// metastore for physical query planning. Requires an index-gateway client.
 	UseIndexGatewayPlanning bool `yaml:"use_index_gateway_planning" category:"experimental"`
+
+	// TSDBStartDate is the earliest date for which TSDB index files exist.
+	// Queries starting before this date fall back to the metastore and skip
+	// dual-resolve comparison. Format YYYY-MM-DD. Unset means no restriction.
+	TSDBStartDate flagext.Time `yaml:"tsdb_start_date" category:"experimental"`
 }
 
 func (cfg *Config) RegisterFlags(f *flag.FlagSet) {
@@ -82,6 +87,7 @@ func (cfg *Config) RegisterFlagsWithPrefix(prefix string, f *flag.FlagSet) {
 	cfg.ResultsCache.RegisterFlagsWithPrefix(f, prefix+"results-cache.")
 	f.IntVar(&cfg.DualResolveMaxConcurrency, prefix+"dual-resolve-max-concurrency", 10, "Experimental: Maximum number of concurrent async index-gateway dual-resolve comparisons. 0 disables dual-resolve.")
 	f.BoolVar(&cfg.UseIndexGatewayPlanning, prefix+"use-index-gateway-planning", false, "Experimental: Use the index-gateway (TSDB) instead of the metastore for physical query planning.")
+	f.Var(&cfg.TSDBStartDate, prefix+"tsdb-start-date", "Experimental: Earliest date for which TSDB index files exist. Format YYYY-MM-DD. Queries before this date fall back to the metastore and skip dual-resolve comparison.")
 }
 
 func (cfg *Config) ValidQueryRange() (time.Time, time.Time) {
@@ -100,6 +106,17 @@ func (cfg *Config) ValidQueryRange() (time.Time, time.Time) {
 	}
 
 	return startDate, now.Add(-cfg.StorageLag)
+}
+
+// TSDBCoversQuery reports whether the TSDB index is expected to cover a query
+// starting at queryStart. Returns true when TSDBStartDate is unset (zero) or
+// queryStart is on or after the configured TSDB start date.
+func (cfg *Config) TSDBCoversQuery(queryStart time.Time) bool {
+	tsdbStart := time.Time(cfg.TSDBStartDate).UTC()
+	if tsdbStart.IsZero() {
+		return true
+	}
+	return !queryStart.Before(tsdbStart)
 }
 
 // AdvertiseAddress determines the TCP address to advertise for accepting

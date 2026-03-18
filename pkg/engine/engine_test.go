@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/go-kit/log"
+	"github.com/grafana/dskit/flagext"
 	"github.com/prometheus/client_golang/prometheus"
 	io_prometheus "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
@@ -210,8 +211,9 @@ func TestMaybeDualResolve_DropsWhenFull(t *testing.T) {
 	// Fill the semaphore
 	e.dualResolveSem <- struct{}{}
 
+	params := fakeParams{start: time.Now().Add(-time.Hour), end: time.Now()}
 	e.maybeDualResolve(
-		log.NewNopLogger(), "tenant", nil, nil, nil, nil, 0,
+		log.NewNopLogger(), "tenant", params, nil, nil, nil, 0,
 	)
 
 	// Verify the dropped counter was incremented
@@ -252,8 +254,9 @@ func TestMaybeDualResolve_RunsAsync(t *testing.T) {
 	// Use a real planner context
 	plannerCtx := physical.NewContext(time.Now().Add(-time.Hour), time.Now())
 
+	params := fakeParams{start: time.Now().Add(-time.Hour), end: time.Now()}
 	e.maybeDualResolve(
-		log.NewNopLogger(), "tenant", nil, nil, plannerCtx, nil, time.Millisecond,
+		log.NewNopLogger(), "tenant", params, nil, plannerCtx, nil, time.Millisecond,
 	)
 
 	// Wait for the goroutine to finish by waiting for the semaphore to be drained
@@ -547,5 +550,30 @@ func TestValidate_UseIndexGatewayPlanning(t *testing.T) {
 		e, err := New(p)
 		require.NoError(t, err)
 		require.NotNil(t, e)
+	})
+}
+
+func TestTSDBCoversQuery(t *testing.T) {
+	tsdbDate := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
+
+	t.Run("unset date always returns true", func(t *testing.T) {
+		cfg := Config{}
+		require.True(t, cfg.TSDBCoversQuery(time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)))
+		require.True(t, cfg.TSDBCoversQuery(time.Now()))
+	})
+
+	t.Run("query after TSDB start date", func(t *testing.T) {
+		cfg := Config{TSDBStartDate: flagext.Time(tsdbDate)}
+		require.True(t, cfg.TSDBCoversQuery(tsdbDate.Add(24*time.Hour)))
+	})
+
+	t.Run("query exactly at TSDB start date", func(t *testing.T) {
+		cfg := Config{TSDBStartDate: flagext.Time(tsdbDate)}
+		require.True(t, cfg.TSDBCoversQuery(tsdbDate))
+	})
+
+	t.Run("query before TSDB start date", func(t *testing.T) {
+		cfg := Config{TSDBStartDate: flagext.Time(tsdbDate)}
+		require.False(t, cfg.TSDBCoversQuery(tsdbDate.Add(-24*time.Hour)))
 	})
 }
