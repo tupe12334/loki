@@ -133,6 +133,9 @@ func (p *Params) validate() error {
 	if p.Config.Executor.BatchSize <= 0 {
 		return fmt.Errorf("invalid batch size for query engine. must be greater than 0, got %d", p.Config.Executor.BatchSize)
 	}
+	if p.Config.UseIndexGatewayPlanning && p.IndexGateway == nil {
+		return errors.New("index gateway client is required when use-index-gateway-planning is enabled")
+	}
 	return nil
 }
 
@@ -386,7 +389,12 @@ func (e *Engine) buildPhysicalPlan(ctx context.Context, tenantID string, logger 
 	span := trace.SpanFromContext(ctx)
 	timer := prometheus.NewTimer(e.metrics.physicalPlanning)
 
-	catalog := physical.NewMetastoreCatalog(e.metastoreSectionsResolver(ctx, tenantID))
+	var catalog physical.Catalog
+	if e.cfg.UseIndexGatewayPlanning && e.indexGateway != nil {
+		catalog = physical.NewTSDBCatalog(e.tsdbSectionsResolver(ctx, tenantID))
+	} else {
+		catalog = physical.NewMetastoreCatalog(e.metastoreSectionsResolver(ctx, tenantID))
+	}
 
 	plannerCtx := physical.NewContext(params.Start(), params.End())
 

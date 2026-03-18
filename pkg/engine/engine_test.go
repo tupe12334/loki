@@ -441,3 +441,64 @@ func TestCompareSections(t *testing.T) {
 		require.Empty(t, cmp.StreamMismatches)
 	})
 }
+
+func TestValidate_UseIndexGatewayPlanning(t *testing.T) {
+	newScheduler := func(t *testing.T) *Scheduler {
+		t.Helper()
+		s, err := scheduler.New(scheduler.Config{
+			Logger:   log.NewNopLogger(),
+			Listener: &wire.Local{Address: wire.LocalScheduler},
+		})
+		require.NoError(t, err)
+		return &Scheduler{inner: s}
+	}
+
+	t.Run("errors when enabled without gateway client", func(t *testing.T) {
+		p := Params{
+			Logger:     log.NewNopLogger(),
+			Registerer: prometheus.NewRegistry(),
+			Config: Config{
+				UseIndexGatewayPlanning: true,
+				Executor:                ExecutorConfig{BatchSize: 100},
+			},
+			Scheduler: newScheduler(t),
+			Metastore: fakeMetastore{},
+		}
+		_, err := New(p)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "index gateway client is required")
+	})
+
+	t.Run("succeeds when enabled with gateway client", func(t *testing.T) {
+		p := Params{
+			Logger:     log.NewNopLogger(),
+			Registerer: prometheus.NewRegistry(),
+			Config: Config{
+				UseIndexGatewayPlanning: true,
+				Executor:                ExecutorConfig{BatchSize: 100},
+			},
+			Scheduler:    newScheduler(t),
+			Metastore:    fakeMetastore{},
+			IndexGateway: &fakeIndexGatewayClient{},
+		}
+		e, err := New(p)
+		require.NoError(t, err)
+		require.NotNil(t, e)
+	})
+
+	t.Run("succeeds when disabled without gateway client", func(t *testing.T) {
+		p := Params{
+			Logger:     log.NewNopLogger(),
+			Registerer: prometheus.NewRegistry(),
+			Config: Config{
+				UseIndexGatewayPlanning: false,
+				Executor:                ExecutorConfig{BatchSize: 100},
+			},
+			Scheduler: newScheduler(t),
+			Metastore: fakeMetastore{},
+		}
+		e, err := New(p)
+		require.NoError(t, err)
+		require.NotNil(t, e)
+	})
+}

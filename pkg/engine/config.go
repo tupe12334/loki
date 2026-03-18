@@ -49,6 +49,10 @@ type Config struct {
 	// DualResolveMaxConcurrency controls the maximum number of concurrent
 	// asynchronous index-gateway dual-resolve comparisons. 0 disables dual-resolve.
 	DualResolveMaxConcurrency int `yaml:"dual_resolve_max_concurrency" category:"experimental"`
+
+	// UseIndexGatewayPlanning uses the index-gateway (TSDB) instead of the
+	// metastore for physical query planning. Requires an index-gateway client.
+	UseIndexGatewayPlanning bool `yaml:"use_index_gateway_planning" category:"experimental"`
 }
 
 func (cfg *Config) RegisterFlags(f *flag.FlagSet) {
@@ -77,6 +81,7 @@ func (cfg *Config) RegisterFlagsWithPrefix(prefix string, f *flag.FlagSet) {
 	f.BoolVar(&cfg.EnforceQuerySeriesLimit, prefix+"enforce-max-query-series-limit", false, "Experimental: When enabled, the tenant's MaxQuerySeries limit is applied. Otherwise, no limit is enforced.")
 	cfg.ResultsCache.RegisterFlagsWithPrefix(f, prefix+"results-cache.")
 	f.IntVar(&cfg.DualResolveMaxConcurrency, prefix+"dual-resolve-max-concurrency", 10, "Experimental: Maximum number of concurrent async index-gateway dual-resolve comparisons. 0 disables dual-resolve.")
+	f.BoolVar(&cfg.UseIndexGatewayPlanning, prefix+"use-index-gateway-planning", false, "Experimental: Use the index-gateway (TSDB) instead of the metastore for physical query planning.")
 }
 
 func (cfg *Config) ValidQueryRange() (time.Time, time.Time) {
