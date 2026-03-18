@@ -651,7 +651,8 @@ func compareSections(msSections, igwSections []resolvedSection) comparisonResult
 		if !slices.Equal(msIDs, entry.StreamIDs) {
 			streamMismatches = append(streamMismatches, ms.Key)
 		}
-		if ms.TimeRange.Start != entry.TimeRange.Start || ms.TimeRange.End != entry.TimeRange.End {
+		if !ms.TimeRange.Start.Truncate(time.Millisecond).Equal(entry.TimeRange.Start.Truncate(time.Millisecond)) ||
+			!ms.TimeRange.End.Truncate(time.Millisecond).Equal(entry.TimeRange.End.Truncate(time.Millisecond)) {
 			timeMismatches = append(timeMismatches, ms.Key)
 		}
 	}

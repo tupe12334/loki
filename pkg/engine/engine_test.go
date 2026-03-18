@@ -446,6 +446,19 @@ func TestCompareSections(t *testing.T) {
 		require.Equal(t, []sectionKey{{"obj1", 0}}, cmp.TimeMismatches)
 	})
 
+	t.Run("sub-millisecond difference is tolerated", func(t *testing.T) {
+		trNano := physical.TimeRange{Start: now.Add(123 * time.Nanosecond), End: now.Add(time.Hour).Add(456 * time.Nanosecond)}
+		trMilli := physical.TimeRange{Start: now.Truncate(time.Millisecond), End: now.Add(time.Hour).Truncate(time.Millisecond)}
+		ms := []resolvedSection{
+			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1}, TimeRange: trNano},
+		}
+		igw := []resolvedSection{
+			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1}, TimeRange: trMilli},
+		}
+		cmp := compareSections(ms, igw)
+		require.Empty(t, cmp.TimeMismatches)
+	})
+
 	t.Run("both missing and mismatched", func(t *testing.T) {
 		ms := []resolvedSection{
 			{Key: sectionKey{"obj1", 0}, StreamIDs: []int64{1, 2}, TimeRange: tr},
